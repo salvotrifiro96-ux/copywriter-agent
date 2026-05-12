@@ -15,9 +15,13 @@ import traceback
 import streamlit as st
 from dotenv import load_dotenv
 
+from dataclasses import asdict
+from uuid import uuid4
+
 from agent import ads as ads_mod
 from agent import confirmation as conf_mod
 from agent import nurturing as nurt_mod
+from agent.store import SupabaseStore
 
 
 # ── Config ─────────────────────────────────────────────────────────
@@ -84,6 +88,50 @@ def _reset_mod(prefix: str) -> None:
     for k in DEFAULT_STATE:
         if k.startswith(prefix):
             st.session_state[k] = DEFAULT_STATE[k]
+
+
+# ── Persistenza Supabase (cross-agent storage) ─────────────────────
+
+
+def _store() -> SupabaseStore | None:
+    """Cache lo SupabaseStore in session_state per non ricostruirlo a ogni rerun."""
+    if "_supabase_store" not in st.session_state:
+        try:
+            st.session_state._supabase_store = SupabaseStore.from_env()
+        except Exception:
+            st.session_state._supabase_store = None
+    return st.session_state._supabase_store
+
+
+def _persist(
+    *,
+    subtype: str,
+    title: str,
+    payload: dict,
+    preview: str,
+    metadata: dict,
+    session_id: str | None = None,
+) -> str | None:
+    """Best-effort save: ritorna l'id Supabase se ok, None altrimenti.
+
+    Mostra un toast discreto in caso di errore — non blocca il flow."""
+    store = _store()
+    if store is None:
+        return None
+    try:
+        saved = store.save_text_output(
+            agent_type="copywriter",
+            subtype=subtype,
+            title=title,
+            payload=payload,
+            preview=preview,
+            metadata=metadata,
+            source_session_id=session_id,
+        )
+        return saved.id
+    except Exception as e:
+        st.toast(f"Salvataggio Supabase fallito: {e}", icon="⚠️")
+        return None
 
 
 # ── Sidebar ────────────────────────────────────────────────────────
@@ -237,6 +285,35 @@ def _ads_input_form(sidebar: dict[str, str]) -> None:
                 "brand_voice": sidebar["brand_voice"],
                 "promise": promise,
             }
+            session_id = uuid4().hex
+            payload = {"variants": [asdict(a) for a in results]}
+            first = results[0] if results else None
+            preview_text = ""
+            if isinstance(first, ads_mod.MetaAd):
+                preview_text = first.primary_text
+            elif isinstance(first, ads_mod.GoogleAd):
+                preview_text = " | ".join(first.headlines[:3])
+            elif isinstance(first, ads_mod.TikTokAd):
+                preview_text = first.hook
+            elif isinstance(first, ads_mod.LinkedInAd):
+                preview_text = first.headline
+            _persist(
+                subtype=f"ads_{channel}",
+                title=(
+                    f"{CHANNEL_LABELS[channel]} — {len(results)} varianti"
+                    + (f" · {promise}" if promise else "")
+                ),
+                payload=payload,
+                preview=preview_text,
+                metadata={
+                    "channel": channel,
+                    "target_audience": sidebar["target_audience"],
+                    "brand_voice": sidebar["brand_voice"],
+                    "promise": promise,
+                    "n_variants": len(results),
+                },
+                session_id=session_id,
+            )
             st.rerun()
         except Exception as e:
             st.error(f"Generazione fallita: {e}")
@@ -468,6 +545,26 @@ def _conf_input_form(sidebar: dict[str, str]) -> None:
                 "promise": promise,
                 "sender": sender,
             }
+            payload = {"variants": [asdict(m) for m in results]}
+            first = results[0] if results else None
+            preview_text = (first.subject + " — " + first.body[:200]) if first else ""
+            _persist(
+                subtype="confirmation_mail",
+                title=(
+                    f"Mail conferma — {lead_magnet or 'lead magnet'}"
+                    + f" ({len(results)} varianti)"
+                ),
+                payload=payload,
+                preview=preview_text,
+                metadata={
+                    "lead_magnet": lead_magnet,
+                    "promise": promise,
+                    "sender": sender,
+                    "target_audience": sidebar["target_audience"],
+                    "n_variants": len(results),
+                },
+                session_id=uuid4().hex,
+            )
             st.rerun()
         except Exception as e:
             st.error(f"Generazione fallita: {e}")
@@ -719,6 +816,35 @@ def _nurt_input_form(sidebar: dict[str, str]) -> None:
                 )
             st.session_state.nurt_results = [mail]
         st.session_state.nurt_last_inputs = last_inputs
+
+        results_for_save = st.session_state.nurt_results
+        if results_for_save:
+            payload = {"mails": [asdict(m) for m in results_for_save]}
+            first = results_for_save[0]
+            preview_text = first.subject + " — " + first.body[:200]
+            sub = "nurturing_sequence" if mode == "sequence" else "nurturing_single"
+            title = (
+                f"Nurturing — {lead_magnet or 'lead magnet'}"
+                f" ({len(results_for_save)} mail)"
+                if mode == "sequence"
+                else f"Nurturing — singola '{role}'"
+            )
+            _persist(
+                subtype=sub,
+                title=title,
+                payload=payload,
+                preview=preview_text,
+                metadata={
+                    "mode": mode,
+                    "lead_magnet": lead_magnet,
+                    "promise": promise,
+                    "offer": offer,
+                    "sender": sender,
+                    "n_mails": len(results_for_save),
+                    **({"role": role} if mode == "single" else {}),
+                },
+                session_id=uuid4().hex,
+            )
         st.rerun()
     except Exception as e:
         st.error(f"Generazione fallita: {e}")

@@ -21,6 +21,13 @@ from uuid import uuid4
 from agent import ads as ads_mod
 from agent import confirmation as conf_mod
 from agent import nurturing as nurt_mod
+from agent.orch_link import (
+    linked_project_context,
+    linked_project_id,
+    linked_project_selected_promise,
+    save_to_project_button,
+    sidebar_project_picker,
+)
 from agent.store import SupabaseStore
 
 
@@ -166,6 +173,19 @@ def _sidebar() -> dict[str, str]:
         for k in list(DEFAULT_STATE):
             st.session_state[k] = DEFAULT_STATE[k]
         st.rerun()
+
+    # Cross-app: collegamento a un progetto orchestrator (opzionale)
+    sidebar_project_picker()
+    # Se collegato a un progetto, pre-popola target+voice dal contesto progetto
+    ctx = linked_project_context()
+    if ctx:
+        # pre-fill solo se i campi sono vuoti
+        if not target and ctx.get("target_audience"):
+            st.session_state["_sb_target"] = ctx["target_audience"]
+            target = ctx["target_audience"]
+        if not voice and ctx.get("brand_voice"):
+            st.session_state["_sb_voice"] = ctx["brand_voice"]
+            voice = ctx["brand_voice"]
 
     return {
         "target_audience": (target or "").strip(),
@@ -404,6 +424,19 @@ def _ads_output_panel(sidebar: dict[str, str]) -> None:
         f"Generate **{len(results)}** varianti per {CHANNEL_LABELS[channel]}."
     )
 
+    # Cross-app: bottone per salvare nel progetto orchestrator collegato
+    if linked_project_id():
+        save_to_project_button(
+            agent_slug="copy",
+            output={
+                "channel": channel,
+                "ads": [asdict(a) for a in results],
+            },
+            user_input={"channel": channel, "n_variants": len(results), **last},
+            label=f"🎯 Approva {len(results)} copy per progetto",
+            key_suffix="ads",
+        )
+
     cols = st.columns([1, 1, 4])
     if cols[0].button("⬅️ Nuovo brief", key="ads_new_brief"):
         _reset_mod("ads_")
@@ -576,6 +609,18 @@ def _conf_output_panel(sidebar: dict[str, str]) -> None:
     last = st.session_state.conf_last_inputs or {}
 
     st.success(f"Generate **{len(results)}** varianti.")
+
+    if linked_project_id():
+        save_to_project_button(
+            agent_slug="copy",
+            output={
+                "type": "confirmation_mails",
+                "mails": [asdict(m) for m in results],
+            },
+            user_input={"type": "confirmation_mails", "n_variants": len(results), **last},
+            label=f"🎯 Approva {len(results)} mail conferma per progetto",
+            key_suffix="conf",
+        )
 
     cols = st.columns([1, 1, 4])
     if cols[0].button("⬅️ Nuovo brief", key="conf_new_brief"):
@@ -856,6 +901,18 @@ def _nurt_output_panel(sidebar: dict[str, str]) -> None:
     last = st.session_state.nurt_last_inputs or {}
 
     st.success(f"Generate **{len(results)}** mail.")
+
+    if linked_project_id():
+        save_to_project_button(
+            agent_slug="copy",
+            output={
+                "type": "nurturing_sequence",
+                "mails": [asdict(m) for m in results],
+            },
+            user_input={"type": "nurturing_sequence", "n_mails": len(results), **last},
+            label=f"🎯 Approva sequenza nurturing per progetto",
+            key_suffix="nurt",
+        )
 
     cols = st.columns([1, 1, 4])
     if cols[0].button("⬅️ Nuovo brief", key="nurt_new_brief"):

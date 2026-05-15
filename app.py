@@ -110,6 +110,60 @@ def _store() -> SupabaseStore | None:
     return st.session_state._supabase_store
 
 
+def _format_archive_ts(iso_string: str) -> str:
+    try:
+        from datetime import datetime as _dt
+        return _dt.fromisoformat(iso_string.replace("Z", "+00:00")).strftime("%d/%m %H:%M")
+    except Exception:
+        return iso_string[:16]
+
+
+_ARCHIVE_SUBTYPES = {
+    "ads_meta": "📣 Meta",
+    "ads_google": "📣 Google",
+    "ads_tiktok": "📣 TikTok",
+    "ads_linkedin": "📣 LinkedIn",
+    "confirmation_mail": "📧 Conferma",
+    "nurturing_sequence": "📬 Nurturing (seq)",
+    "nurturing_single": "📬 Nurturing (single)",
+}
+
+
+def _render_archive_sidebar() -> None:
+    store = _store()
+    st.sidebar.divider()
+    st.sidebar.header("📚 Archivio copywriter")
+    if store is None:
+        st.sidebar.caption(
+            "Archivio disabilitato: mancano `SUPABASE_URL` e `SUPABASE_SECRET_KEY`."
+        )
+        return
+    try:
+        outputs = store.list_recent_outputs(agent_type="copywriter", limit=30)
+    except Exception as e:
+        st.sidebar.error(f"Errore archivio: {e}")
+        return
+    if not outputs:
+        st.sidebar.caption("_Nessun output salvato ancora._")
+        return
+    for o in outputs:
+        sub = o.get("subtype", "?")
+        badge = _ARCHIVE_SUBTYPES.get(sub, sub)
+        ts = _format_archive_ts(o.get("created_at", ""))
+        with st.sidebar.expander(f"{ts} · {badge}"):
+            st.caption(f"_{o.get('title', '(senza titolo)')[:80]}_")
+            if (preview := o.get("preview")):
+                st.text(preview[:300])
+            meta = o.get("metadata") or {}
+            if meta:
+                st.caption(
+                    f"ch=`{meta.get('channel', '?')}` · "
+                    f"n={meta.get('n_variants', '?')}"
+                )
+            with st.expander("Mostra payload JSON"):
+                st.json(o.get("payload") or {})
+
+
 def _persist(
     *,
     subtype: str,
@@ -176,6 +230,7 @@ def _sidebar() -> dict[str, str]:
 
     # Cross-app: collegamento a un progetto orchestrator (opzionale)
     sidebar_project_picker()
+    _render_archive_sidebar()
     # Se collegato a un progetto, pre-popola target+voice dal contesto progetto
     ctx = linked_project_context()
     if ctx:
